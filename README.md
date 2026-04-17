@@ -14,10 +14,8 @@
 
 例如：
 
-访问
+访问下方链接以游玩csc
 
 ```
 0verDay.github.io/game/csc.html
 ```
-
-以游玩csc
