@@ -2,7 +2,11 @@
 
 0verDay组织于github上托管的静态网站
 
-网址为0verDay.github.io
+网址为
+
+```
+0verDay.github.io
+```
 
 ## 玩游戏
 
@@ -10,4 +14,10 @@
 
 例如：
 
-访问0verDay.github.io/game/csc.html以游玩csc
+访问
+
+```
+0verDay.github.io/game/csc.html
+```
+
+以游玩csc
