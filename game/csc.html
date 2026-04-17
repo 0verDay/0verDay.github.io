@@ -60,6 +60,7 @@
     .side-panel.enemy .hp-card { border-color: rgba(255,80,80,0.25);  box-shadow: 0 0 10px rgba(255,60,60,0.08); }
     .side-panel.ally  .hp-card { border-color: rgba(40,220,120,0.25); box-shadow: 0 0 10px rgba(40,220,120,0.08); }
     .hp-card.committed { opacity: 0.48; }
+    .hp-card.dead { opacity: 0.3; filter: grayscale(100%); }
     .side-panel.enemy .hp-card.hovered { border-color: rgba(255,120,120,0.75) !important; box-shadow: 0 0 18px 4px rgba(255,80,80,0.35) !important; }
     .side-panel.ally  .hp-card.hovered { border-color: rgba(60,220,140,0.75)  !important; box-shadow: 0 0 18px 4px rgba(40,220,120,0.35) !important; }
     .hp-card-header { display: flex; align-items: center; gap: 7px; margin-bottom: 1px; }
@@ -67,6 +68,8 @@
     .side-panel.enemy .card-dot { background: radial-gradient(circle at 35% 35%,#ff8a80,#c0392b); box-shadow: 0 0 5px rgba(255,60,60,.7); }
     .side-panel.ally  .card-dot { background: radial-gradient(circle at 35% 35%,#80ffb8,#27ae60); box-shadow: 0 0 5px rgba(40,220,120,.7); }
     .card-label { font-size: 11px; color: rgba(255,255,255,0.45); letter-spacing: 0.4px; }
+    .side-panel.enemy .card-label { color:rgba(255,120,120,.7); }
+    .side-panel.ally  .card-label { color:rgba(80,220,140,.7); }
     .card-name-badge { font-size: 12px; font-weight: 700; margin-left: auto; padding: 1px 6px; border-radius: 5px; letter-spacing: 1px; }
     .side-panel.enemy .card-name-badge { color:#ff8a80; background:rgba(255,80,80,.12);  border:1px solid rgba(255,80,80,.28); }
     .side-panel.ally  .card-name-badge { color:#80ffb8; background:rgba(40,220,120,.12); border:1px solid rgba(40,220,120,.28); }
@@ -126,7 +129,7 @@
   </style>
 </head>
 <body>
-  <div id="turn-banner">回合 <b id="turn-num">1</b>  ·  规划中</div>
+  <div id="turn-banner">回合 <b>1</b>：行动 <b>1</b></div>
   <div class="side-panel enemy" id="panel-enemy"></div>
   <div class="grid" id="grid"></div>
   <div class="side-panel ally"  id="panel-ally"></div>
@@ -148,7 +151,7 @@
       </div>
       <div class="ctx-divider"></div>
     </div>
-    <div class="ctx-item" id="ctx-end-turn"><span class="ctx-icon">⏹</span>结束回合</div>
+    <div class="ctx-item" id="ctx-end-turn"><span class="ctx-icon">⏹</span>结束行动</div>
   </div>
 
 <script>
@@ -169,8 +172,9 @@
 
   var pieces = [];
   var moveQueue={red:[],green:[]}, actionQueue={red:[],green:[]};
+  var operationQueue = []; // 统一的操作队列，按照用户添加的顺序存储
   var usedProjectileIds=new Set();
-  var selected=null, isExecuting=false, turnNumber=1;
+  var selected=null, isExecuting=false, turnNumber=1, actionNumber=1;
   var longPressTimer=null, pressRingEl=null, pressRingCell=null;
   var ctxTargetIdx=null, hoveredPieceId=null;
 
@@ -208,7 +212,8 @@
         boardIndex: boardIndex,
         pendingIndex: null,
         hp: MAX_HP,
-        ep: MAX_EP
+        ep: MAX_EP,
+        money: 800
       };
     });
   }
@@ -216,8 +221,8 @@
   // 使用默认配置初始化棋子
   function initializePiecesWithDefault() {
     pieces = [].concat(
-      NAMES.map(function(n,i){ return{id:i,  name:n,color:RED,  boardIndex:i,   pendingIndex:null,hp:MAX_HP,ep:MAX_EP}; }),
-      NAMES.map(function(n,i){ return{id:i+5,name:n,color:GREEN,boardIndex:20+i,pendingIndex:null,hp:MAX_HP,ep:MAX_EP}; })
+      NAMES.map(function(n,i){ return{id:i,  name:n,color:RED,  boardIndex:i,   pendingIndex:null,hp:MAX_HP,ep:MAX_EP,money:800}; }),
+      NAMES.map(function(n,i){ return{id:i+5,name:n,color:GREEN,boardIndex:20+i,pendingIndex:null,hp:MAX_HP,ep:MAX_EP,money:800}; })
     );
   }
 
@@ -233,13 +238,21 @@
     return cells;
   }
   function hasLoS(fromIdx,toIdx){
+    // 检查起点是否有烟雾
+    var fromState=cellStates[fromIdx];
+    if(fromState&&fromState.type==='smoke') return false;
+    
+    // 检查路径上的障碍物、烟雾和烟雾中的棋子
     return !getCellsBetween(fromIdx,toIdx).some(function(idx){
-      var s=cellStates[idx]; return s&&(s.type==='obstacle'||s.type==='smoke');
+      var s=cellStates[idx];
+      var hasPiece=getPiecesAt(idx).length>0;
+      var hasSmoke=s&&s.type==='smoke';
+      return (s&&s.type==='obstacle')||hasSmoke||(hasPiece&&hasSmoke);
     });
   }
   function isObstacle(idx){ return !!(cellStates[idx]&&cellStates[idx].type==='obstacle'); }
-  function getPiecesAt(idx){ return pieces.filter(function(p){return p.boardIndex===idx;}); }
-  function getGhostsAt(idx){ return pieces.filter(function(p){return p.pendingIndex===idx&&p.pendingIndex!==p.boardIndex;}); }
+  function getPiecesAt(idx){ return pieces.filter(function(p){return p.boardIndex===idx&&!p.dead;}); }
+  function getGhostsAt(idx){ return pieces.filter(function(p){return p.pendingIndex===idx&&p.pendingIndex!==p.boardIndex&&!p.dead;}); }
   function hasPending(p){ return p.pendingIndex!==null; }
   function cellCenter(idx){
     var r=gridEl.querySelectorAll('.cell')[idx].getBoundingClientRect();
@@ -255,21 +268,26 @@
   function renderPanel(el,list,side,label){
     el.innerHTML='';
     list.forEach(function(p){
+      // 检查是否死亡
+      if(p.hp <= 0 && !p.dead) {
+        p.hp = 0;
+        p.dead = true;
+      }
       var pct=Math.max(0,(p.hp/MAX_HP)*100);
       var isSel=selected&&selected.piece===p;
       var isHov=hoveredPieceId===p.id;
       var card=document.createElement('div');
-      card.className='hp-card'+(hasPending(p)?' committed':'')+(isHov?' hovered':'');
+      card.className='hp-card'+(hasPending(p)?' committed':'')+(isHov?' hovered':'')+(p.dead?' dead':'');
       if(isSel) card.style.outline=side==='enemy'?'2px solid rgba(255,100,100,.6)':'2px solid rgba(60,220,130,.6)';
       var epBoxes='';
       for(var i=0;i<MAX_EP;i++) epBoxes+='<div class="ep-box '+(i<p.ep?'filled':'empty')+'"></div>';
+      // 确保棋子对象有money属性，默认为800
+      if(p.money === undefined) p.money = 800;
       card.innerHTML=
-        '<div class="hp-card-header">'+
+        '<div class="hp-card-header">'+  
           '<div class="card-dot"></div>'+
-          '<span class="card-label">'+label+'</span>'+
-          '<span class="card-name-badge">'+p.name+
-            (hasPending(p)?'<span class="card-pending-arrow">→</span>':'')+
-          '</span>'+
+          '<span class="card-label">'+p.name+'</span>'+
+          '<span class="card-name-badge">$ '+p.money+'</span>'+
         '</div>'+
         '<div class="stat-grid">'+
           '<span class="stat-label">HP</span>'+
@@ -302,14 +320,16 @@
             var b=document.createElement('div'); b.className='cell-badge'; b.textContent='🔥'+st.turnsLeft; cell.appendChild(b);
           }
         }
-        if(selected&&!hasPending(selected.piece)) cell.classList.add('drop-target');
-        var physical=getPiecesAt(idx), ghosts=getGhostsAt(idx);
+        if(selected&&!hasPending(selected.piece)&&!selected.piece.dead) cell.classList.add('drop-target');
+        var physical=getPiecesAt(idx).filter(function(p){return !p.dead;}), 
+            ghosts=getGhostsAt(idx).filter(function(p){return !p.dead;});
         var slots=physical.map(function(p){return{p:p,ghost:false};})
                   .concat(ghosts.map(function(p){return{p:p,ghost:true};}));
         var count=Math.min(slots.length,5)||1;
         var layout=LAYOUT[count];
         slots.forEach(function(slot,si){
           var p=slot.p,ghost=slot.ghost;
+          if(p.dead) return;
           var off=layout.offsets[si]||[0,0];
           var el=document.createElement('div');
           el.classList.add('piece',p.color);
@@ -322,7 +342,7 @@
           el.style.fontSize=layout.fs+'px';
           el.style.transform=pieceTransform(off[0],off[1],isSel?1.22:1);
           el.textContent=p.name;
-          if(!ghost&&!isExecuting&&!hasPending(p)){
+          if(!ghost&&!isExecuting&&!hasPending(p)&&!p.dead){
             el.addEventListener('mouseenter',function(){ hoveredPieceId=p.id; renderPanels(); });
             el.addEventListener('mouseleave',function(){ hoveredPieceId=null; renderPanels(); });
             el.addEventListener('mousedown',function(e){
@@ -343,7 +363,7 @@
         cell.addEventListener('contextmenu',function(e){
           e.preventDefault(); e.stopPropagation();
           if(isExecuting) return;
-          if(selected&&!hasPending(selected.piece)){
+          if(selected&&!hasPending(selected.piece)&&!selected.piece.dead){
             ctxTargetIdx=idx;
             var los=hasLoS(selected.piece.boardIndex,idx);
             var obst=isObstacle(idx);
@@ -376,7 +396,15 @@
     if(p.boardIndex!==ctxTargetIdx){
       p.pendingIndex=ctxTargetIdx;
       var colorKey=p.color===RED?'red':'green';
-      moveQueue[colorKey].push({type:'move',pieceId:p.id,from:p.boardIndex,to:ctxTargetIdx});
+      var moveAction={type:'move',pieceId:p.id,from:p.boardIndex,to:ctxTargetIdx};
+      moveQueue[colorKey].push(moveAction);
+      // 添加到统一的操作队列
+      operationQueue.push({
+        color: colorKey,
+        pieceId: p.id,
+        move: moveAction,
+        action: null
+      });
     }
     selected=null; ctxTargetIdx=null; hideCtxMenu(); render();
   }
@@ -387,8 +415,16 @@
     if(usedProjectileIds.has(selected.piece.id)){ hideCtxMenu(); return; }
     usedProjectileIds.add(selected.piece.id);
     var colorKey=selected.piece.color===RED?'red':'green';
-    actionQueue[colorKey].push({type:actionType,pieceId:selected.piece.id,
-                      from:selected.piece.boardIndex,to:ctxTargetIdx});
+    var actionObj={type:actionType,pieceId:selected.piece.id,
+                      from:selected.piece.boardIndex,to:ctxTargetIdx};
+    actionQueue[colorKey].push(actionObj);
+    // 添加到统一的操作队列
+    operationQueue.push({
+      color: colorKey,
+      pieceId: selected.piece.id,
+      move: null,
+      action: actionObj
+    });
     hideCtxMenu(); render();
   }
 
@@ -441,8 +477,16 @@
 
   function tickZones(){
     pieces.forEach(function(p){
+      if(p.dead) return;
       var st=cellStates[p.boardIndex];
-      if(st&&st.type==='fire') p.hp=Math.max(0,p.hp-25);
+      if(st&&st.type==='fire'){
+        p.hp=Math.max(0,p.hp-25);
+        // 检查是否死亡
+        if(p.hp <= 0) {
+          p.hp = 0;
+          p.dead = true;
+        }
+      }
     });
     for(var ci=0;ci<25;ci++){
       var st=cellStates[ci];
@@ -453,77 +497,153 @@
     }
   }
 
+  function checkForDeadPieces(){
+    // 过滤出死亡的棋子
+    var deadPieces=pieces.filter(function(p){return p.hp<=0;});
+    deadPieces.forEach(function(p){
+      // 血量锁定为0
+      p.hp=0;
+      // 标记为死亡
+      p.dead=true;
+    });
+  }
+
   async function executeTurn(){
     isExecuting=true; selected=null;
     document.body.classList.add('executing');
-    updateBanner('执行中…');
+    updateBanner();
 
-    tickZones(); render(); await sleep(120);
+    tickZones(); 
+    // 检查棋子死亡
+    checkForDeadPieces();
+    render(); await sleep(120);
 
     var emojiMap={grenade:'💩',smoke:'🌫️',fire:'🔥'};
 
-    // 为每个阵营创建操作队列，按单位ID分组
-    var redActions = {};
-    var greenActions = {};
+    // 使用统一的operationQueue，按照用户添加的顺序执行
+    // 将同一棋子的移动和投掷操作合并
+    var redActionsMap = {};
+    var greenActionsMap = {};
     
-    // 收集红方操作，按单位ID分组
-    moveQueue.red.forEach(function(mv){
-      if(!redActions[mv.pieceId]){
-        redActions[mv.pieceId] = {pieceId: mv.pieceId, move: null, action: null};
-      }
-      redActions[mv.pieceId].move = mv;
-    });
-    actionQueue.red.forEach(function(act){
-      if(!redActions[act.pieceId]){
-        redActions[act.pieceId] = {pieceId: act.pieceId, move: null, action: null};
-      }
-      redActions[act.pieceId].action = act;
-    });
-    
-    // 收集绿方操作，按单位ID分组
-    moveQueue.green.forEach(function(mv){
-      if(!greenActions[mv.pieceId]){
-        greenActions[mv.pieceId] = {pieceId: mv.pieceId, move: null, action: null};
-      }
-      greenActions[mv.pieceId].move = mv;
-    });
-    actionQueue.green.forEach(function(act){
-      if(!greenActions[act.pieceId]){
-        greenActions[act.pieceId] = {pieceId: act.pieceId, move: null, action: null};
-      }
-      greenActions[act.pieceId].action = act;
-    });
-    
-    // 转换为数组形式
-    var redActionArray = Object.keys(redActions).map(function(key){
-      return {color: 'red', ...redActions[key]};
-    });
-    var greenActionArray = Object.keys(greenActions).map(function(key){
-      return {color: 'green', ...greenActions[key]};
-    });
-    
-    // 按序号分组，确保同序号操作同时执行
-    var maxLength = Math.max(redActionArray.length, greenActionArray.length);
-    
-    for(var i=0;i<maxLength;i++){
-      var currentActions = [];
+    // 过滤死亡棋子，并合并同一棋子的操作
+    operationQueue.forEach(function(op){
+      var piece = pieces.find(function(p){ return p.id === op.pieceId; });
+      if(!piece || piece.dead) return;
       
-      // 收集当前序号的所有操作
-      if(i < redActionArray.length){
-        currentActions.push(redActionArray[i]);
+      if(op.color === 'red') {
+        if(!redActionsMap[op.pieceId]) {
+          redActionsMap[op.pieceId] = {
+            color: 'red',
+            pieceId: op.pieceId,
+            move: null,
+            action: null
+          };
+        }
+        if(op.move) redActionsMap[op.pieceId].move = op.move;
+        if(op.action) redActionsMap[op.pieceId].action = op.action;
+      } else {
+        if(!greenActionsMap[op.pieceId]) {
+          greenActionsMap[op.pieceId] = {
+            color: 'green',
+            pieceId: op.pieceId,
+            move: null,
+            action: null
+          };
+        }
+        if(op.move) greenActionsMap[op.pieceId].move = op.move;
+        if(op.action) greenActionsMap[op.pieceId].action = op.action;
       }
-      if(i < greenActionArray.length){
-        currentActions.push(greenActionArray[i]);
+    });
+    
+    // 按顺序转换为数组
+    var redActionArray = [];
+    var greenActionArray = [];
+    
+    // 保持operationQueue中的顺序，每个棋子只出现一次
+    var processedRedIds = new Set();
+    var processedGreenIds = new Set();
+    
+    operationQueue.forEach(function(op){
+      if(op.color === 'red' && redActionsMap[op.pieceId] && !processedRedIds.has(op.pieceId)) {
+        redActionArray.push(redActionsMap[op.pieceId]);
+        processedRedIds.add(op.pieceId);
+      } else if(op.color === 'green' && greenActionsMap[op.pieceId] && !processedGreenIds.has(op.pieceId)) {
+        greenActionArray.push(greenActionsMap[op.pieceId]);
+        processedGreenIds.add(op.pieceId);
+      }
+    });
+    
+    // 构建红绿双方的操作数组，保持原始顺序
+    var redActionArray = [];
+    var greenActionArray = [];
+    
+    // 保持operationQueue中的顺序，每个棋子只出现一次
+    var processedRedIds = new Set();
+    var processedGreenIds = new Set();
+    
+    operationQueue.forEach(function(op){
+      if(op.color === 'red' && redActionsMap[op.pieceId] && !processedRedIds.has(op.pieceId)) {
+        redActionArray.push(redActionsMap[op.pieceId]);
+        processedRedIds.add(op.pieceId);
+      } else if(op.color === 'green' && greenActionsMap[op.pieceId] && !processedGreenIds.has(op.pieceId)) {
+        greenActionArray.push(greenActionsMap[op.pieceId]);
+        processedGreenIds.add(op.pieceId);
+      }
+    });
+    
+    // 按序号执行，不同阵营的相同序号棋子同时执行
+    // 同时处理棋子死亡后后面的棋子提前执行
+    var redIndex = 0;
+    var greenIndex = 0;
+    
+    while(redIndex < redActionArray.length || greenIndex < greenActionArray.length){
+      var currentBatch = [];
+      
+      // 找到红方当前有效的操作
+      var redAction = null;
+      while(redIndex < redActionArray.length) {
+        var tempRedAction = redActionArray[redIndex];
+        var tempRedPiece = pieces.find(function(p){ return p.id === tempRedAction.pieceId; });
+        if(tempRedPiece && !tempRedPiece.dead) {
+          redAction = tempRedAction;
+          redIndex++;
+          break;
+        }
+        // 跳过死亡棋子
+        redIndex++;
       }
       
-      if(currentActions.length === 0) continue;
+      // 找到绿方当前有效的操作
+      var greenAction = null;
+      while(greenIndex < greenActionArray.length) {
+        var tempGreenAction = greenActionArray[greenIndex];
+        var tempGreenPiece = pieces.find(function(p){ return p.id === tempGreenAction.pieceId; });
+        if(tempGreenPiece && !tempGreenPiece.dead) {
+          greenAction = tempGreenAction;
+          greenIndex++;
+          break;
+        }
+        // 跳过死亡棋子
+        greenIndex++;
+      }
       
-      // 执行当前序号的所有操作
+      // 添加有效的操作到当前批次
+      if(redAction) {
+        currentBatch.push(redAction);
+      }
+      if(greenAction) {
+        currentBatch.push(greenAction);
+      }
+      
+      if(currentBatch.length === 0) continue;
+      
+      // 执行当前批次的所有操作（同时执行）
       var anims = [];
-      currentActions.forEach(function(action){
+      currentBatch.forEach(function(action){
         var piece = pieces.find(function(p){ return p.id === action.pieceId; });
+        if(!piece || piece.dead) return;
         
-        if(action.move && piece){
+        if(action.move){
           anims.push(animateMove(piece, action.move.from, action.move.to));
         }
         if(action.action){
@@ -534,18 +654,26 @@
       if(anims.length) await Promise.all(anims);
       
       // 更新游戏状态
-      currentActions.forEach(function(action){
+      currentBatch.forEach(function(action){
         var piece = pieces.find(function(p){ return p.id === action.pieceId; });
+        if(!piece || piece.dead) return;
         
-        if(action.move && piece){
+        if(action.move){
           piece.boardIndex = action.move.to;
           piece.pendingIndex = null;
         }
         if(action.action){
           if(action.action.type === 'grenade'){
-            getPiecesAt(action.action.to).forEach(function(p){ p.hp = Math.max(0, p.hp - 50); });
+            getPiecesAt(action.action.to).forEach(function(p){ 
+              if(!p.dead) {
+                p.hp = Math.max(0, p.hp - 50); 
+                if(p.hp <= 0) {
+                  p.hp = 0;
+                  p.dead = true;
+                }
+              }
+            });
           } else if(action.action.type === 'fire'){
-            /* ★ 目标格已有烟雾时，火焰被压制，不生成燃烧区域 */
             var targetState = cellStates[action.action.to];
             if(!isObstacle(action.action.to) && !(targetState && targetState.type === 'smoke'))
               cellStates[action.action.to] = {type: 'fire', turnsLeft: 1};
@@ -555,6 +683,7 @@
         }
       });
       
+      checkForDeadPieces();
       render();
       await sleep(60);
     }
@@ -564,6 +693,7 @@
     moveQueue.green.length = 0;
     actionQueue.red.length = 0;
     actionQueue.green.length = 0;
+    operationQueue.length = 0;
     
     isExecuting=false;
     document.body.classList.remove('executing');
@@ -572,12 +702,12 @@
 
   function advanceTurn(){
     usedProjectileIds.clear();
-    turnNumber++;
-    updateBanner('规划中');
+    actionNumber++;
+    updateBanner();
     render();
   }
-  function updateBanner(s){
-    document.getElementById('turn-banner').innerHTML='回合 <b>'+turnNumber+'</b>  ·  '+s;
+  function updateBanner(){
+    document.getElementById('turn-banner').innerHTML='回合 <b>1</b>：行动 <b>'+actionNumber+'</b>';
   }
   function cancelPress(){
     clearTimeout(longPressTimer); longPressTimer=null;
